@@ -8,7 +8,6 @@ Each command must end with a newline.
     PING
     GET_INFO
     READ_ADC_SCALE
-    POWER_VOLTAGE
     STATUS
     CHANNEL_INFO <channel>
     CHANNEL_STATE <channel>

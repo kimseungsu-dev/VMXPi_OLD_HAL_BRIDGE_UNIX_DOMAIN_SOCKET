@@ -1285,24 +1285,6 @@ std::string process_command(
         return response;
     }
 
-    if (command == "POWER_VOLTAGE") {
-        float voltage = 0.0f;
-        VMXErrorCode error = 0;
-
-        if (!vmx.power.GetSystemVoltage(voltage, &error)) {
-            return make_vmx_error(error);
-        }
-
-        char response[64];
-        std::snprintf(
-            response,
-            sizeof(response),
-            "OK VOLTAGE=%.3f\n",
-            static_cast<double>(voltage)
-        );
-        return std::string(response);
-    }
-
     if (command == "READ_ADC_SCALE") {
         VMXErrorCode error = 0;
         float volts = 0.0f;
