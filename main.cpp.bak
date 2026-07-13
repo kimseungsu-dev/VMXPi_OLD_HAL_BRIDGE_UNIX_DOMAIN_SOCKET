@@ -29,7 +29,6 @@ volatile std::sig_atomic_t stop_requested = 0;
 int server_fd = -1;
 
 constexpr std::size_t MAX_VMX_CHANNELS = 34;
-constexpr std::size_t MAX_COMMAND_LINE_BYTES = 4096;
 constexpr std::size_t MAX_UART_TRANSFER_BYTES = 1024;
 constexpr std::size_t MAX_SPI_TRANSFER_BYTES = 1024;
 constexpr std::size_t MAX_I2C_TRANSFER_BYTES = 1024;
@@ -668,7 +667,7 @@ bool read_line(int fd, std::string& line)
     line.clear();
     char ch = '\0';
 
-    while (line.size() < MAX_COMMAND_LINE_BYTES) {
+    while (line.size() < 1024) {
         const ssize_t received = recv(fd, &ch, 1, 0);
 
         if (received == 0) {

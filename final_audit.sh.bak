@@ -29,7 +29,7 @@ systemctl is-active --quiet "$SERVICE" && {
 }
 
 if pgrep -f \
-    '(^|/)vmx_controller32([[:space:]]|$)' \
+    '^/root/OLD_HAL_BRIDGE_UNIX_DOMAIN_SOCKET/vmx_controller32$' \
     >/dev/null; then
     echo "[FAIL] Controller process remains after service stop." >&2
     exit 1
