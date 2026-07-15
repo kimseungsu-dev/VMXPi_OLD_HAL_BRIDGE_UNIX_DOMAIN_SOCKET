@@ -116,23 +116,3 @@ Each command must end with a newline.
     WATCHDOG_CONFIG <timeout_ms> <0|1>
     WATCHDOG_FEED
     WATCHDOG_EXPIRE
-
-## Raw CAN
-
-```text
-CAN_INIT
-CAN_MODE <NORMAL|LISTEN|LOOPBACK>
-CAN_SEND <id_hex> <STD|EXT> <hex_1_to_8_bytes>
-CAN_OPEN <filter_hex> <mask_hex> <STD|EXT> <capacity>
-CAN_READ <handle>
-CAN_CLOSE <handle>
-CAN_STATUS
-```
-
-`CAN_SEND` performs a one-shot CAN transmission.
-
-`STD` selects an 11-bit CAN identifier.
-
-`EXT` selects a 29-bit CAN identifier.
-
-Receive streams are closed automatically when the socket client disconnects.
