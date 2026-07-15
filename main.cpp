@@ -92,6 +92,12 @@ struct ControllerState
     VMXResourceHandle pwm_handles[MAX_VMX_CHANNELS];
     uint32_t pwm_frequency_hz[MAX_VMX_CHANNELS];
 
+    // TITAN_BRIDGE_V1
+    bool titan_configured = false;
+    uint8_t titan_can_id = 42;
+    bool titan_enabled = false;
+    double titan_speed[4] = {0.0, 0.0, 0.0, 0.0};
+
     // VMX_CAN_BRIDGE_V1
     std::vector<VMXCANReceiveStreamHandle>
         can_receive_streams;
@@ -490,6 +496,143 @@ std::string make_vmx_error(VMXErrorCode error)
     return std::string(response);
 }
 
+
+constexpr uint32_t TITAN_CAN_BASE = 0x020C0000U;
+constexpr uint32_t TITAN_CAN_OFFSET = 0x40U;
+constexpr uint32_t TITAN_DISABLED_INDEX = 0U;
+constexpr uint32_t TITAN_ENABLED_INDEX = 1U;
+constexpr uint32_t TITAN_SET_SPEED_INDEX = 2U;
+
+uint32_t titan_message_id(uint8_t can_id, uint32_t index)
+{
+    return TITAN_CAN_BASE +
+        (TITAN_CAN_OFFSET * index) +
+        static_cast<uint32_t>(can_id);
+}
+
+bool send_titan_frame(
+    VMXPi& vmx,
+    uint8_t can_id,
+    uint32_t index,
+    const uint8_t data[8],
+    int32_t period_ms,
+    VMXErrorCode& error
+)
+{
+    VMXCANMessage message {};
+    message.messageID = titan_message_id(can_id, index);
+    message.dataSize = 8;
+    message.setData(data, 8);
+
+    error = 0;
+    return vmx.can.SendMessage(message, period_ms, &error);
+}
+
+bool titan_enable(
+    VMXPi& vmx,
+    ControllerState& state,
+    VMXErrorCode& last_error
+)
+{
+    const uint8_t data[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        VMXErrorCode error = 0;
+
+        if (!send_titan_frame(
+                vmx,
+                state.titan_can_id,
+                TITAN_ENABLED_INDEX,
+                data,
+                0,
+                error)) {
+            last_error = error;
+            return false;
+        }
+
+        vmx.time.DelayMilliseconds(20);
+    }
+
+    state.titan_enabled = true;
+    last_error = 0;
+    return true;
+}
+
+bool titan_brake_all(
+    VMXPi& vmx,
+    ControllerState& state,
+    VMXErrorCode& last_error
+)
+{
+    bool success = true;
+    last_error = 0;
+
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        for (uint8_t motor = 0; motor < 4; ++motor) {
+            const uint8_t data[8] = {
+                motor, 0, 1, 1, 0, 0, 0, 0
+            };
+
+            VMXErrorCode error = 0;
+
+            if (!send_titan_frame(
+                    vmx,
+                    state.titan_can_id,
+                    TITAN_SET_SPEED_INDEX,
+                    data,
+                    0,
+                    error)) {
+                success = false;
+                last_error = error;
+            }
+        }
+
+        vmx.time.DelayMilliseconds(20);
+    }
+
+    for (int motor = 0; motor < 4; ++motor) {
+        state.titan_speed[motor] = 0.0;
+    }
+
+    return success;
+}
+
+bool titan_stop_and_disable(
+    VMXPi& vmx,
+    ControllerState& state,
+    VMXErrorCode& last_error
+)
+{
+    const uint8_t data[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    bool success = true;
+    last_error = 0;
+
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        VMXErrorCode error = 0;
+
+        if (!send_titan_frame(
+                vmx,
+                state.titan_can_id,
+                TITAN_DISABLED_INDEX,
+                data,
+                0,
+                error)) {
+            success = false;
+            last_error = error;
+        }
+
+        vmx.time.DelayMilliseconds(50);
+    }
+
+    state.titan_enabled = false;
+
+    for (int motor = 0; motor < 4; ++motor) {
+        state.titan_speed[motor] = 0.0;
+    }
+
+    return success;
+}
+
 bool safe_stop_outputs(
     VMXPi& vmx,
     ControllerState& state,
@@ -572,6 +715,16 @@ bool safe_stop_outputs(
         if (!vmx.io.LEDArray_Render(
                 state.led_array_handles[channel],
                 &error)) {
+            success = false;
+            last_error = error;
+        }
+    }
+
+
+    if (state.titan_configured) {
+        VMXErrorCode error = 0;
+
+        if (!titan_stop_and_disable(vmx, state, error)) {
             success = false;
             last_error = error;
         }
@@ -5957,6 +6110,185 @@ std::string process_command(
             sizeof(response),
             "OK CAN_MODE=%s\n",
             can_mode_name(mode)
+        );
+
+        return std::string(response);
+    }
+
+
+    if (command.rfind("TITAN_INIT", 0) == 0) {
+        unsigned int can_id = 0;
+
+        if (std::sscanf(
+                command.c_str(),
+                "TITAN_INIT %u",
+                &can_id) != 1) {
+            return "ERR USAGE=TITAN_INIT_<can_id_1_to_63>\n";
+        }
+
+        if (can_id < 1 || can_id > 63) {
+            return "ERR TITAN_CAN_ID_RANGE=1..63\n";
+        }
+
+        VMXErrorCode error = 0;
+
+        if (!vmx.can.SetMode(VMXCAN::VMXCAN_NORMAL, &error)) {
+            return make_vmx_error(error);
+        }
+
+        state.titan_configured = true;
+        state.titan_can_id = static_cast<uint8_t>(can_id);
+        state.titan_enabled = false;
+
+        for (int motor = 0; motor < 4; ++motor) {
+            state.titan_speed[motor] = 0.0;
+        }
+
+        char response[96];
+
+        std::snprintf(
+            response,
+            sizeof(response),
+            "OK TITAN_INIT CAN_ID=%u ENABLED=0\n",
+            can_id
+        );
+
+        return std::string(response);
+    }
+
+    if (command == "TITAN_ENABLE") {
+        if (!state.titan_configured) {
+            return "ERR TITAN_NOT_INITIALIZED\n";
+        }
+
+        VMXErrorCode error = 0;
+
+        if (!titan_enable(vmx, state, error)) {
+            return make_vmx_error(error);
+        }
+
+        return "OK TITAN_ENABLE ENABLED=1\n";
+    }
+
+    if (command.rfind("TITAN_SET", 0) == 0) {
+        unsigned int motor = 0;
+        double speed = 0.0;
+
+        if (std::sscanf(
+                command.c_str(),
+                "TITAN_SET %u %lf",
+                &motor,
+                &speed) != 2) {
+            return "ERR USAGE=TITAN_SET_<motor_0_to_3>_<speed_-1_to_1>\n";
+        }
+
+        if (!state.titan_configured) {
+            return "ERR TITAN_NOT_INITIALIZED\n";
+        }
+
+        if (motor > 3) {
+            return "ERR TITAN_MOTOR_RANGE=0..3\n";
+        }
+
+        if (speed < -1.0 || speed > 1.0) {
+            return "ERR TITAN_SPEED_RANGE=-1..1\n";
+        }
+
+        VMXErrorCode error = 0;
+
+        if (!state.titan_enabled &&
+            !titan_enable(vmx, state, error)) {
+            return make_vmx_error(error);
+        }
+
+        const double magnitude = speed < 0.0 ? -speed : speed;
+        int duty = static_cast<int>((magnitude * 100.0) + 0.5);
+
+        if (duty > 100) {
+            duty = 100;
+        }
+
+        uint8_t in_a = 1;
+        uint8_t in_b = 1;
+
+        if (speed > 0.0) {
+            in_a = 1;
+            in_b = 0;
+        } else if (speed < 0.0) {
+            in_a = 0;
+            in_b = 1;
+        }
+
+        const uint8_t data[8] = {
+            static_cast<uint8_t>(motor),
+            static_cast<uint8_t>(duty),
+            in_a,
+            in_b,
+            0,
+            0,
+            0,
+            0
+        };
+
+        if (!send_titan_frame(
+                vmx,
+                state.titan_can_id,
+                TITAN_SET_SPEED_INDEX,
+                data,
+                0,
+                error)) {
+            return make_vmx_error(error);
+        }
+
+        state.titan_speed[motor] = speed;
+
+        char response[128];
+
+        std::snprintf(
+            response,
+            sizeof(response),
+            "OK TITAN_SET MOTOR=%u SPEED=%.3f DUTY=%d\n",
+            motor,
+            speed,
+            duty
+        );
+
+        return std::string(response);
+    }
+
+    if (command == "TITAN_STOP" ||
+        command == "TITAN_DISABLE") {
+        if (!state.titan_configured) {
+            return "ERR TITAN_NOT_INITIALIZED\n";
+        }
+
+        VMXErrorCode error = 0;
+
+        if (!titan_stop_and_disable(vmx, state, error)) {
+            return make_vmx_error(error);
+        }
+
+        return "OK TITAN_STOP ENABLED=0\n";
+    }
+
+    if (command == "TITAN_STATUS") {
+        if (!state.titan_configured) {
+            return "OK TITAN_STATUS CONFIGURED=0\n";
+        }
+
+        char response[256];
+
+        std::snprintf(
+            response,
+            sizeof(response),
+            "OK TITAN_STATUS CONFIGURED=1 CAN_ID=%u ENABLED=%d "
+            "M0=%.3f M1=%.3f M2=%.3f M3=%.3f\n",
+            static_cast<unsigned int>(state.titan_can_id),
+            state.titan_enabled ? 1 : 0,
+            state.titan_speed[0],
+            state.titan_speed[1],
+            state.titan_speed[2],
+            state.titan_speed[3]
         );
 
         return std::string(response);
