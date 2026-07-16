@@ -724,7 +724,7 @@ bool safe_stop_outputs(
     if (state.titan_configured) {
         VMXErrorCode error = 0;
 
-        if (!titan_stop_and_disable(vmx, state, error)) {
+        if (!titan_brake_all(vmx, state, error)) {
             success = false;
             last_error = error;
         }
@@ -6264,11 +6264,11 @@ std::string process_command(
 
         VMXErrorCode error = 0;
 
-        if (!titan_stop_and_disable(vmx, state, error)) {
+        if (!titan_brake_all(vmx, state, error)) {
             return make_vmx_error(error);
         }
 
-        return "OK TITAN_STOP ENABLED=0\n";
+        return "OK TITAN_STOP OUTPUTS=ZERO ENABLE_FRAME_UNCHANGED=1\n";
     }
 
     if (command == "TITAN_STATUS") {
